@@ -1006,9 +1006,24 @@ function dind::down {
   done
 }
 
+function dind::down-all {
+  docker ps -a -q --filter=label=mirantis.kubeadm_dind_cluster | while read container_id; do
+    dind::step "Removing container:" "${container_id}"
+    docker rm -fv "${container_id}"
+  done
+}
+
 function dind::remove-volumes {
   # docker 1.13+: docker volume ls -q -f label=mirantis.kubeadm_dind_cluster=${CLUSTER_PREFIX}
   docker volume ls -q | (grep "^kubeadm-dind-${CLUSTER_PREFIX}" || true) | while read volume_id; do
+    dind::step "Removing volume:" "${volume_id}"
+    docker volume rm "${volume_id}"
+  done
+}
+
+function dind::remove-volumes-all {
+  # docker 1.13+: docker volume ls -q -f label=mirantis.kubeadm_dind_cluster
+  docker volume ls -q | (grep "^kubeadm-dind-" || true) | while read volume_id; do
     dind::step "Removing volume:" "${volume_id}"
     docker volume rm "${volume_id}"
   done
@@ -1086,6 +1101,17 @@ function dind::clean {
   if docker network inspect "${CLUSTER_PREFIX}kubeadm-dind-net" >&/dev/null; then
     docker network rm "${CLUSTER_PREFIX}kubeadm-dind-net"
   fi
+}
+
+function dind::clean-all {
+  dind::down-all
+  # dind::remove-images
+  dind::remove-volumes-all
+  # docker 1.12+: docker network ls -q -f label=mirantis.kubeadm_dind_cluster
+  docker network ls | (grep "kubeadm-dind-net" || true) | cut -d' ' -f1 | while read network_id; do
+    dind::step "Removing network:" "${network_id}"
+    docker network rm "${network_id}"
+  done
 }
 
 function dind::run-e2e {
@@ -1252,6 +1278,9 @@ case "${1:-}" in
   down)
     dind::down
     ;;
+  down-all)
+    dind::down-all
+    ;;
   init)
     shift
     dind::prepare-sys-mounts
@@ -1279,6 +1308,9 @@ case "${1:-}" in
   clean)
     dind::clean
     ;;
+  clean-all)
+    dind::clean-all
+    ;;
   e2e)
     shift
     dind::run-e2e "$@"
@@ -1304,10 +1336,12 @@ case "${1:-}" in
     echo "  $0 up" >&2
     echo "  $0 reup" >&2
     echo "  $0 down" >&2
+    echo "  $0 down-all" >&2
     echo "  $0 init kubeadm-args..." >&2
     echo "  $0 join kubeadm-args..." >&2
     # echo "  $0 bare container_name [docker_options...]"
     echo "  $0 clean"
+    echo "  $0 clean-all"
     echo "  $0 e2e [test-name-substring]" >&2
     echo "  $0 e2e-serial [test-name-substring]" >&2
     echo "  $0 dump" >&2
