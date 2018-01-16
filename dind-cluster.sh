@@ -187,7 +187,7 @@ function dind::volume-exists {
 
 function dind::create-volume {
   local name="$1"
-  docker volume create --label mirantis.${CLUSTER_PREFIX}kubeadm_dind_cluster --name "${name}" >/dev/null
+  docker volume create --label mirantis.kubeadm_dind_cluster=${CLUSTER_PREFIX} --name "${name}" >/dev/null
 }
 
 # We mount /boot and /lib/modules into the container
@@ -209,22 +209,22 @@ function dind::prepare-sys-mounts {
     fi
     return 0
   fi
-  if ! dind::volume-exists kubeadm-dind-sys; then
+  if ! dind::volume-exists "${CLUSTER_PREFIX}kubeadm-dind-sys"; then
     dind::step "Saving a copy of docker host's /lib/modules"
-    dind::create-volume kubeadm-dind-sys
+    dind::create-volume "${CLUSTER_PREFIX}kubeadm-dind-sys"
     # Use a dirty nsenter trick to fool Docker on Mac and grab system
-    # /lib/modules into sys.tar file on kubeadm-dind-sys volume.
+    # /lib/modules into sys.tar file on ${CLUSTER_PREFIX}kubeadm-dind-sys volume.
     local nsenter="nsenter --mount=/proc/1/ns/mnt --"
     docker run \
            --rm \
            --privileged \
-           -v kubeadm-dind-sys:/dest \
+           -v "${CLUSTER_PREFIX}kubeadm-dind-sys":/dest \
            --pid=host \
            "${busybox_image}" \
            /bin/sh -c \
            "if ${nsenter} test -d /lib/modules; then ${nsenter} tar -C / -c lib/modules >/dest/sys.tar; fi"
   fi
-  sys_volume_args=(-v kubeadm-dind-sys:/dind-sys)
+  sys_volume_args=(-v "${CLUSTER_PREFIX}kubeadm-dind-sys":/dind-sys)
 }
 
 tmp_containers=()
@@ -429,7 +429,7 @@ function dind::ensure-network {
       # Need second network for NAT64
       v6settings="--subnet=172.18.0.0/16 --ipv6"
     fi
-    docker network create ${v6settings} --subnet="${DIND_SUBNET}/${DIND_SUBNET_SIZE}" --gateway="${dind_ip_base}1" "${CLUSTER_PREFIX}kubeadm-dind-net" >/dev/null
+    docker network create ${v6settings} --subnet="${DIND_SUBNET}/${DIND_SUBNET_SIZE}" --gateway="${dind_ip_base}1" "${CLUSTER_PREFIX}kubeadm-dind-net" --label mirantis.kubeadm_dind_cluster=${CLUSTER_PREFIX} >/dev/null
   fi
 }
 
@@ -478,7 +478,7 @@ BIND9_EOF
 		docker-machine ssh k8s-dind sudo mkdir -p ${bind9_path}/conf ${bind9_path}/cache
 		docker-machine ssh k8s-dind sudo cp /home/docker-user/bind9-named.conf ${bind9_path}/conf/named.conf
 	    fi
-	    docker run -d --name bind9 --hostname bind9 --net "${CLUSTER_PREFIX}kubeadm-dind-net" --label mirantis.${CLUSTER_PREFIX}kubeadm_dind_cluster \
+	    docker run -d --name bind9 --hostname bind9 --net "${CLUSTER_PREFIX}kubeadm-dind-net" --label mirantis.kubeadm_dind_cluster=${CLUSTER_PREFIX} \
 		   --sysctl net.ipv6.conf.all.disable_ipv6=0 --sysctl net.ipv6.conf.all.forwarding=1 \
 		   --privileged=true --ip6 $dns_server --dns $dns_server \
 		   -v ${bind9_path}/conf/named.conf:/etc/bind/named.conf \
@@ -493,7 +493,7 @@ BIND9_EOF
 function dind::ensure-nat {
     if [[  ${IP_MODE} = "ipv6" ]]; then
         if ! docker ps | grep tayga >&/dev/null; then
-            docker run -d --name tayga --hostname tayga --net "${CLUSTER_PREFIX}kubeadm-dind-net" --label mirantis.${CLUSTER_PREFIX}kubeadm_dind_cluster \
+            docker run -d --name tayga --hostname tayga --net "${CLUSTER_PREFIX}kubeadm-dind-net" --label mirantis.kubeadm_dind_cluster=${CLUSTER_PREFIX} \
 		   --sysctl net.ipv6.conf.all.disable_ipv6=0 --sysctl net.ipv6.conf.all.forwarding=1 \
 		   --privileged=true --ip 172.18.0.200 --ip6 ${LOCAL_NAT64_SERVER} --dns ${REMOTE_DNS64_V4SERVER} --dns ${dns_server} \
 		   -e TAYGA_CONF_PREFIX=${DNS64_PREFIX_CIDR} -e TAYGA_CONF_IPV4_ADDR=172.18.0.200 \
@@ -582,7 +582,7 @@ function dind::run {
          --net "${CLUSTER_PREFIX}kubeadm-dind-net" \
          --name "${container_name}" \
          --hostname "${container_name}" \
-         -l mirantis.${CLUSTER_PREFIX}kubeadm_dind_cluster \
+         -l mirantis.kubeadm_dind_cluster=${CLUSTER_PREFIX} \
          -v ${volume_name}:/dind \
          ${opts[@]+"${opts[@]}"} \
          "${DIND_IMAGE}" \
@@ -754,7 +754,7 @@ function dind::create-node-container {
   # if there's just one node currently, it's master, thus we need to use
   # ${CLUSTER_PREFIX}kube-node-1 hostname, if there are two nodes, we should pick
   # ${CLUSTER_PREFIX}kube-node-2 and so on
-  local next_node_index=${1:-$(docker ps -q --filter=label=mirantis.${CLUSTER_PREFIX}kubeadm_dind_cluster | wc -l | sed 's/^ *//g')}
+  local next_node_index=${1:-$(docker ps -q --filter=label=mirantis.kubeadm_dind_cluster=${CLUSTER_PREFIX} | wc -l | sed 's/^ *//g')}
   local node_ip="${dind_ip_base}$((next_node_index + 2))"
   local -a opts
   if [[ ${BUILD_KUBEADM} || ${BUILD_HYPERKUBE} ]]; then
@@ -1000,14 +1000,14 @@ function dind::restore {
 }
 
 function dind::down {
-  docker ps -a -q --filter=label=mirantis.${CLUSTER_PREFIX}kubeadm_dind_cluster | while read container_id; do
+  docker ps -a -q --filter=label=mirantis.kubeadm_dind_cluster=${CLUSTER_PREFIX} | while read container_id; do
     dind::step "Removing container:" "${container_id}"
     docker rm -fv "${container_id}"
   done
 }
 
 function dind::remove-volumes {
-  # docker 1.13+: docker volume ls -q -f label=mirantis.${CLUSTER_PREFIX}kubeadm_dind_cluster
+  # docker 1.13+: docker volume ls -q -f label=mirantis.kubeadm_dind_cluster=${CLUSTER_PREFIX}
   docker volume ls -q | (grep "^kubeadm-dind-${CLUSTER_PREFIX}" || true) | while read volume_id; do
     dind::step "Removing volume:" "${volume_id}"
     docker volume rm "${volume_id}"
@@ -1136,7 +1136,7 @@ function dind::step {
 function dind::dump {
   set +e
   echo "*** Dumping cluster state ***"
-  for node in $(docker ps --format '{{.Names}}' --filter label=mirantis.${CLUSTER_PREFIX}kubeadm_dind_cluster); do
+  for node in $(docker ps --format '{{.Names}}' --filter label=mirantis.kubeadm_dind_cluster=${CLUSTER_PREFIX}); do
     for service in kubelet.service dindnet.service criproxy.service dockershim.service; do
       if docker exec "${node}" systemctl is-enabled "${service}" >&/dev/null; then
         echo "@@@ service-${node}-${service}.log @@@"
